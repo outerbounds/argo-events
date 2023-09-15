@@ -16,8 +16,8 @@ EXECUTABLES = curl docker gzip go
 #  docker image publishing options
 DOCKER_PUSH?=false
 IMAGE_NAMESPACE?=quay.io/argoproj
-VERSION?=v1.7.6
-BASE_VERSION:=v1.7.6
+VERSION?=latest
+BASE_VERSION:=latest
 
 override LDFLAGS += \
   -X ${PACKAGE}.version=${VERSION} \
@@ -65,7 +65,11 @@ dist/$(BINARY_NAME)-%:
 	CGO_ENABLED=0 $(GOARGS) go build -v -ldflags '${LDFLAGS}' -o ${DIST_DIR}/$(BINARY_NAME)-$* ./cmd
 
 .PHONY: image
-image: clean dist/$(BINARY_NAME)-linux-amd64
+BUILD_DIST = dist/$(BINARY_NAME)-linux-amd64
+ifeq ($(shell uname -m),arm64)
+BUILD_DIST = dist/$(BINARY_NAME)-linux-arm64
+endif
+image: clean $(BUILD_DIST)
 	DOCKER_BUILDKIT=1 docker build -t $(IMAGE_NAMESPACE)/$(BINARY_NAME):$(VERSION)  --target $(BINARY_NAME) -f $(DOCKERFILE) .
 	@if [ "$(DOCKER_PUSH)" = "true" ]; then docker push $(IMAGE_NAMESPACE)/$(BINARY_NAME):$(VERSION); fi
 ifeq ($(K3D),true)
@@ -87,7 +91,14 @@ test:
 	go test $(shell go list ./... | grep -v /vendor/ | grep -v /test/e2e/) -race -short -v
 
 test-functional:
-	go test -v -timeout 15m -count 1 --tags functional -p 1 ./test/e2e
+ifeq ($(EventBusDriver),kafka)
+	kubectl -n argo-events apply -k test/manifests/kafka
+	kubectl -n argo-events wait -l statefulset.kubernetes.io/pod-name=kafka-0 --for=condition=ready pod --timeout=60s
+endif
+	go test -v -timeout 20m -count 1 --tags functional -p 1 ./test/e2e
+ifeq ($(EventBusDriver),kafka)
+	kubectl -n argo-events delete -k test/manifests/kafka
+endif
 
 # to run just one of the functional e2e tests by name (i.e. 'make TestMetricsWithWebhook'):
 Test%:
@@ -144,7 +155,7 @@ start: image
 	kubectl -n argo-events wait --for=condition=Ready --timeout 60s pod --all
 
 $(GOPATH)/bin/golangci-lint:
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b `go env GOPATH`/bin v1.49.0
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b `go env GOPATH`/bin v1.52.1
 
 .PHONY: lint
 lint: $(GOPATH)/bin/golangci-lint
