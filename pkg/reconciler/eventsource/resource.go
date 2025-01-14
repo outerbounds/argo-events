@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"os"
+	"strings"
 
 	"github.com/argoproj/argo-events/pkg/apis/events/v1alpha1"
 	aev1 "github.com/argoproj/argo-events/pkg/apis/events/v1alpha1"
@@ -98,7 +100,7 @@ func Reconcile(client client.Client, args *AdaptorArgs, logger *zap.SugaredLogge
 		logger.Errorw("error getting existing service", "error", err)
 		return err
 	}
-	expectedSvc, err := buildService(args)
+	expectedSvc, err := buildService(args, logger)
 	if err != nil {
 		eventSource.Status.MarkDeployFailed("BuildServiceFailed", "Failed to build service spec")
 		logger.Errorw("error building service spec", "error", err)
@@ -424,7 +426,7 @@ func getService(ctx context.Context, cl client.Client, args *AdaptorArgs) (*core
 	return nil, apierrors.NewNotFound(schema.GroupResource{}, "")
 }
 
-func buildService(args *AdaptorArgs) (*corev1.Service, error) {
+func buildService(args *AdaptorArgs, logger *zap.SugaredLogger) (*corev1.Service, error) {
 	eventSource := args.EventSource
 	if eventSource.Spec.Service == nil {
 		return nil, nil
@@ -464,6 +466,36 @@ func buildService(args *AdaptorArgs) (*corev1.Service, error) {
 	svc.ObjectMeta.SetLabels(labels)
 	svc.ObjectMeta.SetAnnotations(annotations)
 
+	if os.Getenv("DEPLOYMENT_NAME") != "" {
+		webhookEndpoint := "webhook." + eventSource.Namespace + "." + os.Getenv("DEPLOYMENT_NAME")
+		if svc.ObjectMeta.Annotations == nil {
+			svc.ObjectMeta.Annotations = map[string]string{
+				"external-dns.alpha.kubernetes.io/hostname": webhookEndpoint,
+			}
+		} else {
+			svc.ObjectMeta.Annotations["external-dns.alpha.kubernetes.io/hostname"] = webhookEndpoint
+		}
+	}
+
+	if os.Getenv("WEBHOOK_SERVICE_TYPE") != "" {
+		switch os.Getenv("WEBHOOK_SERVICE_TYPE") {
+		case "LoadBalancer":
+			svc.Spec.Type = corev1.ServiceTypeLoadBalancer
+		default:
+			svc.Spec.Type = corev1.ServiceTypeClusterIP
+		}
+	}
+
+	if os.Getenv("LOADBALANCER_IP_RANGES") != "" {
+		ipRangesOpts := os.Getenv("LOADBALANCER_IP_RANGES")
+		ipRanges := strings.Split(ipRangesOpts, ",")
+		for idx := range ipRanges {
+			ipRanges[idx] = ipRanges[idx] + "/32"
+		}
+		svc.Spec.LoadBalancerSourceRanges = append(svc.Spec.LoadBalancerSourceRanges, ipRanges...)
+	}
+
+	logger.Infof("created service object %#v", svc)
 	if err := controllerscommon.SetObjectMeta(eventSource, svc, v1alpha1.EventSourceGroupVersionKind); err != nil {
 		return nil, err
 	}

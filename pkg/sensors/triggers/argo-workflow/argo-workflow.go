@@ -129,6 +129,17 @@ func (t *ArgoWorkflowTrigger) Execute(ctx context.Context, events map[string]*v1
 		namespace = t.Sensor.Namespace
 	}
 
+	// name: ARGO_CLI_EXTRA_ARGS
+	// value: --kubeconfig /my/path/to/kubeconfig
+	var extraArgs []string
+	extraArgsEnv := os.Getenv("ARGO_CLI_EXTRA_ARGS")
+	if extraArgsEnv != "" {
+		esplit := strings.Split(extraArgsEnv, " ")
+		for i := range esplit {
+			extraArgs = append(extraArgs, esplit[i])
+		}
+	}
+
 	var cmd *exec.Cmd
 
 	switch op {
@@ -157,7 +168,10 @@ func (t *ArgoWorkflowTrigger) Execute(ctx context.Context, events map[string]*v1
 		if _, err := file.Write(jObj); err != nil {
 			return nil, fmt.Errorf("failed to write workflow json %s to the temp file %s, %w", name, file.Name(), err)
 		}
-		cmd = exec.Command("argo", "-n", namespace, "submit", file.Name())
+
+		allArgs := []string{"-n", namespace, "submit", file.Name()}
+		allArgs = append(allArgs, extraArgs...)
+		cmd = exec.Command("argo", allArgs...)
 	case v1alpha1.SubmitFrom:
 		kind := obj.GetKind()
 		switch strings.ToLower(kind) {
@@ -189,8 +203,15 @@ func (t *ArgoWorkflowTrigger) Execute(ctx context.Context, events map[string]*v1
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Args = append(cmd.Args, trigger.Template.ArgoWorkflow.Args...)
+	t.Logger.Infof("submitting command %#v", cmd)
 	if err := t.cmdRunner(cmd); err != nil {
 		return nil, fmt.Errorf("failed to execute %s command for workflow %s, %w", string(op), name, err)
+	}
+
+	triggerOnly := os.Getenv("TRIGGER_WF_ONLY")
+	if !strings.EqualFold(triggerOnly, "") {
+		var i interface{}
+		return i, nil
 	}
 
 	t.namespableDynamicClient = t.DynamicClient.Resource(schema.GroupVersionResource{
