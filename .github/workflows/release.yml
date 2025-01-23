@@ -7,6 +7,7 @@ on:
     branches:
       - master
       - dev-*
+      - release-*
 
 defaults:
   run:
@@ -14,11 +15,12 @@ defaults:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   build-binaries:
     runs-on: ubuntu-20.04
-    if: github.repository == 'argoproj/argo-events'
+    if: github.repository == 'outerbounds/argo-events'
     name: Build binaries
     steps:
       - name: Checkout
@@ -27,7 +29,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.22"
 
       - name: Build binaries
         run: |
@@ -36,7 +38,7 @@ jobs:
       - name: Make checksums
         run: make checksums
       - name: store artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: binaries
           path: dist
@@ -44,42 +46,58 @@ jobs:
   build-push-linux-multi:
     name: Build & push linux/amd64 and linux/arm64
     needs: [ build-binaries ]
-    runs-on: ubuntu-20.04
-    if: github.repository == 'argoproj/argo-events'
+    runs-on: ubuntu-latest
+    if: github.repository == 'outerbounds/argo-events'
     strategy:
       matrix:
         target: [ argo-events ]
+    env:
+      ECR_REGISTRY: 006988687827.dkr.ecr.us-west-2.amazonaws.com
+
     steps:
       - uses: actions/checkout@v4
 
+      - name: Generate build ID
+        id: prep
+        run: |
+          branch=${GITHUB_REF##*/}
+          sha=${GITHUB_SHA::8}
+          ts=$(date +%s)
+          release_tag=$(git describe --tags --exact-match --match 'v*' || echo "dirty")
+          echo "BUILD_ID=${branch}-${sha}-${ts}" >> $GITHUB_ENV
+          echo "RELEASE_BRANCH=${branch}" >> $GITHUB_ENV
+          echo "RELEASE_TAG=${release_tag}" >> $GITHUB_ENV
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: arn:aws:iam::006988687827:role/obp-argo-events-image-pusher
+          aws-region: us-west-2
+
+      - run: aws sts get-caller-identity
+
+      - name: Login to ECR
+        uses: docker/login-action@v1
+        with:
+          registry: ${{ env.ECR_REGISTRY }}
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+            driver: docker-container
+            platforms: linux/amd64,linux/arm64
 
       - name: Download binaries
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: binaries
           path: dist/
 
-      - name: Registry Login
-        uses: docker/login-action@v2
-        with:
-          registry: quay.io
-          username: ${{ secrets.QUAYIO_USERNAME }}
-          password: ${{ secrets.QUAYIO_PASSWORD }}
-
-      - name: set Version
-        id: version
-        run: |
-          tag=$(basename $GITHUB_REF)
-          if [ $tag = "master" ]; then
-            tag="latest"
-          fi
-          echo "VERSION=$tag" >> $GITHUB_OUTPUT
-
       - name: Container build and push with arm64/amd64
         run: |
-          IMAGE_NAMESPACE=${{ secrets.QUAYIO_ORG }} VERSION=${{ steps.version.outputs.VERSION }} DOCKER_PUSH=true make image-multi
+          IMAGE_NAMESPACE=${{ env.ECR_REGISTRY }} VERSION=${{ env.RELEASE_BRANCH }} DOCKER_PUSH=true make image-multi
+          IMAGE_NAMESPACE=${{ env.ECR_REGISTRY }} VERSION=${{ env.RELEASE_TAG }} DOCKER_PUSH=true make image-multi
+          IMAGE_NAMESPACE=${{ env.ECR_REGISTRY }} VERSION=${{ env.BUILD_ID }} DOCKER_PUSH=true make image-multi
 
   bom:
     runs-on: ubuntu-latest
@@ -104,7 +122,7 @@ jobs:
       - run: bom generate --image quay.io/argoproj/argo-events:$VERSION -o /tmp/argo-events.spdx
       # pack the boms into one file to make it easy to download
       - run: cd /tmp && tar -zcf sbom.tar.gz *.spdx
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: sbom.tar.gz
           path: /tmp/sbom.tar.gz
@@ -128,12 +146,12 @@ jobs:
           fi
 
       - name: Download binaries
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: binaries
           path: dist/
 
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
           name: sbom.tar.gz
           path: /tmp

@@ -7,6 +7,7 @@ DIST_DIR=${CURRENT_DIR}/dist
 DOCKERFILE:=Dockerfile
 
 BINARY_NAME:=argo-events
+IMAGE_NAME:=obp-argo-events
 
 BUILD_DATE=$(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
 GIT_COMMIT=$(shell git rev-parse HEAD)
@@ -94,17 +95,17 @@ BUILD_DIST = dist/$(BINARY_NAME)-linux-arm64
 endif
 image: clean $(BUILD_DIST)
 	DOCKER_BUILDKIT=1 $(DOCKER) build -t $(IMAGE_NAMESPACE)/$(BINARY_NAME):$(VERSION)  --target $(BINARY_NAME) -f $(DOCKERFILE) .
-	@if [[ "$(DOCKER_PUSH)" = "true" ]]; then $(DOCKER) push $(IMAGE_NAMESPACE)/$(BINARY_NAME):$(VERSION); fi
+	@if [[ "$(DOCKER_PUSH)" = "true" ]]; then $(DOCKER) push $(IMAGE_NAMESPACE)/$(IMAGE_NAME):$(VERSION); fi
 ifdef IMAGE_IMPORT_CMD
 	$(IMAGE_IMPORT_CMD) $(IMAGE_NAMESPACE)/$(BINARY_NAME):$(VERSION)
 endif
 
 image-linux-%: dist/$(BINARY_NAME)-linux-%
-	DOCKER_BUILDKIT=1 $(DOCKER) build --build-arg "ARCH=$*" -t $(IMAGE_NAMESPACE)/$(BINARY_NAME):$(VERSION)-linux-$* --platform "linux/$*" --target $(BINARY_NAME) -f $(DOCKERFILE) .
-	@if [[ "$(DOCKER_PUSH)" = "true" ]]; then $(DOCKER) push $(IMAGE_NAMESPACE)/$(BINARY_NAME):$(VERSION)-linux-$*; fi
+	DOCKER_BUILDKIT=1 $(DOCKER) build --build-arg "ARCH=$*" -t $(IMAGE_NAMESPACE)/$(IMAGE_NAME):$(VERSION)-linux-$* --platform "linux/$*" --target $(BINARY_NAME) -f $(DOCKERFILE) .
+	@if [[ "$(DOCKER_PUSH)" = "true" ]]; then $(DOCKER) push $(IMAGE_NAMESPACE)/$(IMAGE_NAME):$(VERSION)-linux-$*; fi
 
 image-multi: set-qemu dist/$(BINARY_NAME)-linux-arm64.gz dist/$(BINARY_NAME)-linux-amd64.gz
-	$(DOCKER) buildx build --sbom=false --provenance=false --tag $(IMAGE_NAMESPACE)/$(BINARY_NAME):$(VERSION) --target $(BINARY_NAME) --platform linux/amd64,linux/arm64 --file ./Dockerfile ${PUSH_OPTION} .
+	$(DOCKER) buildx build --sbom=false --provenance=false --tag $(IMAGE_NAMESPACE)/$(IMAGE_NAME):$(VERSION) --target $(BINARY_NAME) --platform linux/amd64,linux/arm64 --file ./Dockerfile ${PUSH_OPTION} .
 
 set-qemu:
 	$(DOCKER) pull tonistiigi/binfmt:latest
